@@ -1,0 +1,32 @@
+{
+	"name": "esdf-store-redis",
+	"preferGlobal": false,
+	"version": "0.1.0",
+	"author": "Robert Kawecki <thewanderer@gim11.pl>",
+	"description": "redis event store module for esdf",
+	"contributors": [],
+	"scripts": {
+		"test": "mocha tests"
+	},
+	"keywords": [
+		"ddd",
+		"domain",
+		"cqrs",
+		"event",
+		"sourcing"
+	],
+	"dependencies": {
+		"when": "2.x.x",
+		"redis": "0.8.x"
+	},
+	"devDependencies": {
+		"uuid": "1.4.x"
+	},
+	"peerDependencies": {
+		"esdf": "0.1.x"
+	},
+	"license": "GPL3",
+	"engines": {
+		"node": ">=0.8"
+	}
+}
