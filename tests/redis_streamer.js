@@ -16,10 +16,18 @@ describe('RedisEventStreamer', function(){
 			var sinkClient = redis.createClient();
 			var streamClient = redis.createClient();
 			var sink = new RedisEventSink(sinkClient);
-			var streamer = new RedisEventStreamer(streamClient, undefined, 'test-streamer-basic', {persistent: true, pollingDelay: 200});
-			sink.sink(new Commit([new Event('StreamTestEv', {test: true})], 'streamtest-' + uuid.v4(), 1)).then(function _commitSunk(){
+			var streamer = new RedisEventStreamer(streamClient, undefined, 'test-streamer-basic', {persistent: true, pollingDelay: 100});
+			var streamID = 'streamtest-' + uuid.v4();
+			sink.sink(new Commit([new Event('StreamTestEv', {test: true})], streamID, 1)).then(function _commitSunk(){
 				streamer.setPublisher({
-					publishCommit: function(commit){done(); streamer.pause(); streamClient.end(); return when.resolve();}
+					publishCommit: function(commit){
+						if(commit.sequenceID === streamID){
+							done();
+							streamer.pause();
+							streamClient.end();
+						}
+						return when.resolve();
+					}
 				});
 				streamer.start();
 			});
@@ -30,12 +38,20 @@ describe('RedisEventStreamer', function(){
 			var messagingClient = redis.createClient();
 			var sink = new RedisEventSink(sinkClient);
 			var streamer = new RedisEventStreamer(streamClient, messagingClient, 'test-streamer-basic', {persistent: true, pollingDelay: 50});
-			sink.sink(new Commit([new Event('StreamTestEv', {test: true})], 'streamtest-' + uuid.v4(), 1)).then(function _commitSunk(){
-				streamer.setPublisher({
-					publishCommit: function(commit){done(); return when.resolve();}
-				});
-				streamer.start();
+			var testID = 'streamtest-' + uuid.v4();
+			streamer.setPublisher({
+				publishCommit: function(commit){
+					if(commit.sequenceID === testID){
+						done();
+					}
+					return when.resolve();}
 			});
+			streamer.start();
+			setTimeout(function(){
+				sink.sink(new Commit([new Event('StreamTestEv', {test: true})], testID, 1)).then(function _commitSunk(){
+					
+				});
+			}, 100);
 		});
 	});
 });

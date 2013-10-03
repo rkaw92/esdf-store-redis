@@ -9,6 +9,7 @@ var util = require('util');
 
 var dispatchPrefix = 'dispatch:';
 var dispatchGlobalKey = 'global';
+var sequencePrefix = 'sequence:';
 var readAtOnce = 100;
 var dispatchNotificationChannel = 'dispatch-notify';
 var clientIndexKeyPrefix = 'client-index:';
@@ -23,7 +24,6 @@ function RedisEventStreamer(readerConnection, subscriberConnection, streamerID, 
 	}
 	this._persistent = (typeof(options.persistent) !== 'undefined') ? Boolean(options.persistent) : true;
 	this._useMessaging = (typeof(subscriberConnection) === 'object' && subscriberConnection !== null && typeof(subscriberConnection.subscribe) === 'function');
-	console.log('_useMessaging set in constructor:', this._useMessaging);
 	this._pollingDelay = (typeof(options.pollingDelay) === 'number') ? options.pollingDelay : 1000;
 	
 	this._paused = true;
@@ -50,9 +50,7 @@ RedisEventStreamer.prototype.start = function start(){
 	if(this._persistent){
 		determineFirstIndex = function(){
 			return when.promise(function(resolve, reject){
-				console.log('Getting the streamer\'s last index');
 				self._readerConnection.get(clientIndexKeyPrefix + self._streamerID, function(err, counterValue){
-					console.log('Got the last index!');
 					if(err){
 						reject(err);
 						return;
@@ -60,7 +58,6 @@ RedisEventStreamer.prototype.start = function start(){
 					resolve(Number(counterValue));
 					return;
 				});
-				console.log('GET called');
 			});
 		};
 	}
@@ -73,7 +70,6 @@ RedisEventStreamer.prototype.start = function start(){
 	// Actually call the index getter function.
 	determineFirstIndex().then(
 	function _startIndexDetermined(startIndex){
-		console.log('Start index determined:', startIndex);
 		var shouldReadNow = true;
 		var reading = false;
 		// We have the index now. Proceed with the streaming.
@@ -87,17 +83,13 @@ RedisEventStreamer.prototype.start = function start(){
 				return;
 			}
 			if(shouldReadNow){
-				console.log('Will issue readNow()');
 				reading = true;
 				// Reset the "read next" flag to false if we are using messaging - a dispatch notification message can come in and set it back to true later.
 				shouldReadNow = self._useMessaging ? false : true;
-				console.log('shouldReadNow: set to', shouldReadNow, ' while _useMessaging =', self._useMessaging);
 				var readNow = function(){
-					console.log('Issuing an LRANGE');
 					self._readerConnection.lrange(dispatchPrefix + dispatchGlobalKey, startIndex, startIndex + readAtOnce - 1, function(err, elements){
-						console.log('LRANGE returned:', elements);
 						if(err){
-							//TODO: abort/retry/fail?
+							// TODO: Reading stops and must be resumed. This behaviour on encountering any "error" events should be documented.
 							self.emit('error', err);
 							reading = false;
 							return;
@@ -106,11 +98,9 @@ RedisEventStreamer.prototype.start = function start(){
 						if(elements.length === readAtOnce){
 							shouldReadNow = true;
 						}
-						//TODO: foreach? promise loop?
 						// Iterate through all the elements that we managed to read from the dispatch queue.
 						var fetchedMessagesIndex = 0;
-						//TODO: parse each commit, extract events, publish one after another.
-						var processNextElement = function(){
+						var _processNextElement = function(){
 							// Check the boundary condition - if true, we have exhausted the list we've read.
 							if(fetchedMessagesIndex >= elements.length){
 								reading = false;
@@ -121,25 +111,55 @@ RedisEventStreamer.prototype.start = function start(){
 										// Nothing to do here - in the worst case, if an error has occured, the client will simply resume from an old index.
 									});
 								}
+								if(elements.length === readAtOnce){
+									// We've read the full number of records from the database - there may still be more. Try to keep up.
+									setImmediate(_readCommitStream);
+								}
+								else{
+									// There were less records than we hoped to get. This means more still has not been produced. Hold back, ease the load on the server.
+								}
 								return;
 							}
-							// If we're here, this means an element is to be processed. Each element is a commit containing events, which all need to be processed separately.
-							
-							
-							when(self._publisherFunction());
+							var currentCommitPointer = JSON.parse(elements[fetchedMessagesIndex]);
+							// If we're here, this means a commit is to be processed.
+							self._readerConnection.lrange(sequencePrefix + currentCommitPointer.sequenceID, currentCommitPointer.sequenceSlot - 1, currentCommitPointer.sequenceSlot - 1, function(err, results){
+								if(err){
+									self.emit('error', new Error('Single commit retrieval via LRANGE failed: ' + err));
+									reading = false;
+									self._paused = true;
+									return;
+								}
+								if(results.length === 1){
+									var currentCommit = JSON.parse(results[0]);
+									when(self._publisherFunction(currentCommit),
+									function _commitPublished(ok){
+										++fetchedMessagesIndex;
+										setImmediate(_processNextElement);
+									},
+									function _commitPublishFailed(reason){
+										self.emit('error', reason);
+										// Notice how the counter is not incremented, in order to try publishing with this commit again when resumed.
+										//setImmediate(_processNextElement);
+										reading = false;
+										self._paused = true;
+										return;
+									});
+								}
+								else{
+									// Corrupt commit pointer - this should never happen!
+									self.emit('error', new Error('Corrupt commit pointer - no commit found under the indicated sequenceID/sequenceNumber'));
+									reading = false;
+									return;
+								}
+							});
 						};
-						processNextElement();
+						// The recursive function is defined - now run it.
+						_processNextElement();
 					}); //end of lrange call
 				};
-				if(self._pollingDelay === 0){
-					setImmediate(readNow);
-				}
-				else{
-					setTimeout(readNow, self._pollingDelay);
-				}
+				setImmediate(readNow);
 			}
 			else{
-				console.log('Should NOT read now...');
 				// Reached only in case messaging is enabled - otherwise, "shouldReadNow" is always true (and polling is done using delays instead).
 				//  This branch intentionally does nothing.
 			}
@@ -148,6 +168,7 @@ RedisEventStreamer.prototype.start = function start(){
 		if(self._useMessaging){
 			self._subscriberConnection.subscribe(dispatchNotificationChannel);
 			self._subscriberFunction = function(channel, message){
+				console.log('Notification received:', message);
 				if(channel === dispatchNotificationChannel){
 					shouldReadNow = true;
 					_readCommitStream();
@@ -156,7 +177,6 @@ RedisEventStreamer.prototype.start = function start(){
 			self._subscriberConnection.on('message', self._subscriberFunction);
 		}
 		// Launch the first read.
-		console.log('Launching _readCommitStream!');
 		_readCommitStream();
 	},
 	function _startIndexDeterminationFailure(err){

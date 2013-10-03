@@ -1,0 +1,4 @@
+=== TODO ===
+* Sink throughput test
+* Streamer throughput test
+* Streamer latency test (from emission to publish)

@@ -1,5 +1,6 @@
 var redis = require('redis');
 var uuid = require('uuid');
+var assert = require('assert');
 var client = redis.createClient();
 var RedisEventSink = require('../EventStore/RedisEventSink.js').RedisEventSink;
 var ESDF = require('esdf');
@@ -9,7 +10,6 @@ var EventSourcedAggregate = ESDF.core.EventSourcedAggregate;
 var tryWith = ESDF.utils.tryWith;
 
 function DummyAR(){
-	this._initializeAggregateMetadata();
 	this._ready = false;
 }
 DummyAR.prototype = new EventSourcedAggregate();
@@ -42,9 +42,9 @@ describe('RedisEventSink', function(){
 				sink.sink(new Commit([new Event('BulkCrapEvent', {fat: 'somewhat'})], 'LotsOfMe' + lotsUUID, i)).then(finishSingle, done);
 			}
 		});
+		var dummyID = 'dummy-' + uuid.v4();
 		it('should manage to rehydrate an object after saving a commit', function(done){
 			var dummyObject = new DummyAR();
-			var dummyID = 'dummy-' + uuid.v4();
 			var sink = new RedisEventSink(client);
 			dummyObject._aggregateID = dummyID;
 			dummyObject._eventSink = sink;
@@ -52,10 +52,17 @@ describe('RedisEventSink', function(){
 			dummyObject.commit().then(function(){
 				var secondInstance = new DummyAR();
 				sink.rehydrate(secondInstance, dummyID).then(function(){
-					done(secondInstance._ready ? undefined : new Error('_ready should be true, but is: ' + secondInstance._ready));
+					assert(secondInstance._ready);
+					done();
 				});
 			});
 		});
-		it('should be suitable as a loader for tryWith');
+		it('should be suitable as a loader backend for tryWith', function(done){
+			var sink = new RedisEventSink(client);
+			var loader = ESDF.utils.createAggregateLoader(sink);
+			tryWith(loader, DummyAR, dummyID, function(AR){
+				assert.strictEqual(AR._ready, true);
+			}).then(done);
+		});
 	});
 });

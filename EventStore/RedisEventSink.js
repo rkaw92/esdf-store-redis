@@ -1,13 +1,22 @@
 var when = require('when');
 
+/**
+ * Construct a new RedisEventSink instance.
+ * A Redis-based event sink saves aggregate commits in per-AR lists, while atomically pushing their IDs onto a separate, global dispatch list.
+ * The streamer then reads this global list incrementally and dispatches messages by getting them from the individual lists.
+ * Requires Redis 2.6 (with Lua script EVAL support). Will not run on Redis 2.4.
+ * @param {external:RedisClient} client A Redis client object, as returned by the "redis" module's createClient().
+ * @constructor
+ */
 function RedisEventSink(client){
 	this._client = client;
 	//TODO: this._client.on('error') ?
 }
 
-// This is the Lua script used when saving a commit. It checks the sequence length against the expected number, and if it matches, appends the commit (otherwise, returns false).
-//  Since Lua scripts are executed atomically within redis, it pushes a dispatch pointer (to maintain global commit ordering) after the commit is saved.
-//  On errors, an error is returned to the EVAL() callback.
+/** This is the Lua script used when saving a commit. It checks the sequence length against the expected number, and if it matches, appends the commit (otherwise, returns false).
+ *  Since Lua scripts are executed atomically within redis, it pushes a dispatch pointer (to maintain global commit ordering) after the commit is saved.
+ *  On errors, an error is returned to the EVAL() callback.
+ */
 var transactionalAggregateAppend = [
 	"local list_length = redis.call('LLEN', KEYS[1])",
 	"if (list_length == tonumber(ARGV[1])) then",
@@ -22,7 +31,13 @@ var transactionalAggregateAppend = [
 var sequencePrefix = 'sequence:';
 var dispatchPrefix = 'dispatch:';
 var dispatchGlobalKey = 'global';
+var dispatchNotificationChannel = 'dispatch-notify';
 
+/**
+ * Save a commit to the database.
+ * @param {module:esdf/core/Commit} commit The commit object to save. Saved under the sequence ID and slot indicated in the commit's properties.
+ * @returns {external:Promise} A promise that resolves when the saving process is complete.
+ */
 RedisEventSink.prototype.sink = function sink(commit){
 	var self = this;
 	var sinkFuture = when.defer();
@@ -38,6 +53,9 @@ RedisEventSink.prototype.sink = function sink(commit){
 		// Note: Lua boolean true is mapped to redis numeric value 1, and false is mapped to nil (null in JS)
 		if(!err && result == 1){
 			// No error reported and the Lua script returned true, so both the dispatch message and the commit must have been saved.
+			self._client.publish(dispatchNotificationChannel, JSON.stringify({sequenceID: commit.sequenceID, sequenceSlot: commit.sequenceSlot}), function(err, result){
+				// Result deliberately ignored. There is no harm in failed notifications, as long as the streamer is aware of the possibility and does periodic polling.
+			});
 			sinkFuture.resolver.resolve(true);
 		}
 		else{
@@ -48,6 +66,14 @@ RedisEventSink.prototype.sink = function sink(commit){
 	return sinkFuture.promise;
 };
 
+/**
+ * Re-apply commits under a particular sequence (aggregate) ID to an object. Commits are applied synchronously, one after another.
+ * Requires that the object present an applyCommit function.
+ * @param {module:esdf/core/EventSourcedAggregate} object The object which should accept the commits.
+ * @param {string} sequenceID The stream ID to read when fetching the commits.
+ * @param {number} since Which sequence slot to begin with. 1 is the first commit in the stream.
+ * @see {module:esdf/core/EventSourcedAggregate.applyCommit}
+ */
 RedisEventSink.prototype.rehydrate = function rehydrate(object, sequenceID, since){
 	var rehydrateFuture = when.defer();
 	var sinceIndex = since ? (Number(since) - 1) : 0; // Commit #1 is element #0. Starts from index 0 by default.
