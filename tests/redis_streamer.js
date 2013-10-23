@@ -12,6 +12,7 @@ var EventSourcedAggregate = ESDF.core.EventSourcedAggregate;
 
 describe('RedisEventStreamer', function(){
 	describe('.start', function(){
+		/*
 		it('should dispatch a message to the publisher function without using messaging', function(done){
 			var sinkClient = redis.createClient();
 			var streamClient = redis.createClient();
@@ -32,6 +33,7 @@ describe('RedisEventStreamer', function(){
 				streamer.start();
 			});
 		});
+	*/
 		it('should dispatch a message to the publisher function with the use of redis pub-sub messaging', function(done){
 			var sinkClient = redis.createClient();
 			var streamClient = redis.createClient();
@@ -39,19 +41,33 @@ describe('RedisEventStreamer', function(){
 			var sink = new RedisEventSink(sinkClient);
 			var streamer = new RedisEventStreamer(streamClient, messagingClient, 'test-streamer-basic', {persistent: true, pollingDelay: 50});
 			var testID = 'streamtest-' + uuid.v4();
+			
+			var publishedMeAlready = false;
+			function almostDone(){
+				if(!publishedMeAlready){
+					publishedMeAlready = true;
+					setTimeout(function(){
+						streamer._markNextIndex().then(done.bind(undefined, undefined));
+					}, 10);
+				}
+			};
 			streamer.setPublisher({
 				publishCommit: function(commit){
 					if(commit.sequenceID === testID){
-						done();
+						almostDone();
 					}
-					return when.resolve();}
+					return when.resolve();
+				}
 			});
 			streamer.start();
 			setTimeout(function(){
 				sink.sink(new Commit([new Event('StreamTestEv', {test: true})], testID, 1)).then(function _commitSunk(){
-					
+					console.log('* Test commit sunk');
 				});
-			}, 100);
+			}, 10);
 		});
+	});
+	describe('.disengage', function(){
+		it('should safely stop a running streaming process and then resume it');
 	});
 });
