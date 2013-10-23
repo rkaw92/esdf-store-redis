@@ -15,16 +15,16 @@ function RedisEventSink(client){
 
 /** This is the Lua script used when saving a commit. It checks the sequence length against the expected number, and if it matches, appends the commit (otherwise, returns false).
  *  Since Lua scripts are executed atomically within redis, it pushes a dispatch pointer (to maintain global commit ordering) after the commit is saved.
- *  On errors, an error is returned to the EVAL() callback.
+ *  On infrastructural (non-logic) errors, an error is returned to the EVAL() callback.
  */
 var transactionalAggregateAppend = [
 	"local list_length = redis.call('LLEN', KEYS[1])",
 	"if (list_length == tonumber(ARGV[1])) then",
 	"	redis.call('RPUSH', KEYS[1], ARGV[2])",
 	"	redis.call('RPUSH', KEYS[2], ARGV[3])",
-	"	return true",
+	"	return redis.call('LLEN', KEYS[2])", // get the length of the dispatch list after the push
 	"else",
-	"	return false",
+	"	return 0",
 	"end"
 ].join("\n");
 
@@ -49,11 +49,11 @@ RedisEventSink.prototype.sink = function sink(commit){
 	// Compute the expected length - if it differs, redis will signal a concurrency exception (by returning false).
 	var expectedSequenceLength = commit.sequenceSlot - 1;
 	// Note: capital EVAL is used to shut jshint up [ https://github.com/jshint/jshint/issues/1204 ].
-	self._client.EVAL([transactionalAggregateAppend, 2, sequenceKey, dispatchKey, expectedSequenceLength, commitPayload, commitDispatchEnvelope], function(err, result){
-		// Note: Lua boolean true is mapped to redis numeric value 1, and false is mapped to nil (null in JS)
-		if(!err && result == 1){
-			// No error reported and the Lua script returned true, so both the dispatch message and the commit must have been saved.
-			self._client.publish(dispatchNotificationChannel, JSON.stringify({sequenceID: commit.sequenceID, sequenceSlot: commit.sequenceSlot}), function(err, result){
+	self._client.EVAL([transactionalAggregateAppend, 2, sequenceKey, dispatchKey, expectedSequenceLength, commitPayload, commitDispatchEnvelope], function(err, listNewLength){
+		// Note: Lua boolean true is mapped to redis numeric value 1, and false is mapped to nil (null in JS).
+		if(!err && listNewLength !== 0){
+			// No error reported and the Lua script returned the new dispatch list length, so both the dispatch message and the commit must have been saved.
+			self._client.publish(dispatchNotificationChannel, JSON.stringify({sequenceID: commit.sequenceID, sequenceSlot: commit.sequenceSlot, dispatchIndex: listNewLength - 1}), function(err, result){
 				// Result deliberately ignored. There is no harm in failed notifications, as long as the streamer is aware of the possibility and does periodic polling.
 			});
 			sinkFuture.resolver.resolve(true);
