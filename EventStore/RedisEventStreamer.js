@@ -65,7 +65,6 @@ function RedisEventStreamer(readerConnection, subscriberConnection, streamerID, 
 	
 	this._paused = true;
 	this._pausing = false;
-	this._pollingInProgress = false;
 	this._publisherFunction = undefined;
 	this._subscriberFunction = undefined;
 	this._markerIndex = 0;
@@ -115,7 +114,6 @@ RedisEventStreamer.prototype._startMarkerTimer = function _startMarkerTimer(){
 	}
 };
 
-//TODO: rework all polling functions to use EventEmitter-based interrupts instead of checkStop.
 RedisEventStreamer.prototype.start = function start(){
 	var self = this;
 	if(self._running){
@@ -231,7 +229,6 @@ RedisEventStreamer.prototype._handleMessagingBasedStreaming = function _handleMe
 		}
 		catch(jsonParseError){ // Note that this is a variable, not an exception class specifier.
 			// Who in their right mind would give us malformed JSON?
-			//TODO: Consider wrapping the error here, too.
 			conditionalRestart(jsonParseError);
 		}
 	};
@@ -255,10 +252,8 @@ RedisEventStreamer.prototype._handleMessagingBasedStreaming = function _handleMe
 	// Get the length of the dispatch list right after subscribing. Now we know that if something were to write into the list,
 	//  it would have to publish a message, too (assuming correct behaviour of the Event Sink and no crashes between write and publish).
 	//TODO: handle situations where the notification is never sent because of a writer crash, etc.
-	//TODO: what about race conditions between subscribe and llen? Something could write to the database between those two calls.
 	// Lock halting - _halt() will not transition to "paused" by itself if it sees that someone is reading. That gives us time to complete the operation before restart.
 	self._readerConnection.llen(dispatchPrefix + dispatchGlobalKey, function(err, currentListLength){
-		//TODO: check for error in err.
 		if(err){
 			conditionalRestart(new ErrorWrapper('Initial LLEN failed when preparing to catch up before entering messaging mode', err));
 			return;
@@ -270,52 +265,49 @@ RedisEventStreamer.prototype._handleMessagingBasedStreaming = function _handleMe
 		}
 		// We've got the dispatch list length (of some recent point in the past) and we are not supposed to stop. Activate the subscriber.
 		// Now, we need to catch up with the global dispatch list.
+		var initialPublishPromise;
 		if(currentListLength > 0){
-			self._publishCommitsFromDispatchList(startIndex, currentListLength - 1).then(
-			function _commitsPublishedBeforeEnablingMessaging(){
-				// The last shouldStop check - beyond this point, outstanding commits will be pushed out and catch-up mode will be disabled immediately.
-				if(shouldStop){
-					self._halt();
-					return;
-				}
-				// We have published all the initial elements (i.e. the ones that we do not expect to see incoming as messages).
-				//  All that's left is the commits which arrived when we were catching up. Throw them at Redis and call it a day.
-				pendingNotifications.forEach(function(notification){
-					publishCommitFromParsedPointerAsync(notification);
-				});
-				// Clear the temporary store and switch to messaging mode, finally.
-				pendingNotifications = [];
-				catchingUp = false;
-				// We're in messaging mode now. Nothing more to do - the subscriber function has taken over.
-			},
-			function _initialPreMessagingPublishFailed(reason){
-				if(shouldStop){
-					self._halt();
-					return;
-				}
-				//TODO: Wrap this error.
-				conditionalRestart(new ErrorWrapper('Initial catch-up publish failed before entering messaging mode', reason));
-			});
+			initialPublishPromise = self._publishCommitsFromDispatchList(startIndex, currentListLength - 1);
 		}
 		else{
-			// No elements published initially - since we have been subscribed for quite a while, just release the publish lock.
-			//TODO.
+			initialPublishPromise = when.resolve('Nothing to publish in the initial phase - proceeding to purge the pending async list');
 		}
+		initialPublishPromise.then(
+		function _commitsPublishedBeforeEnablingMessaging(){
+			// The last shouldStop check - beyond this point, outstanding commits will be pushed out and catch-up mode will be disabled immediately.
+			if(shouldStop){
+				self._halt();
+				return;
+			}
+			// We have published all the initial elements (i.e. the ones that we do not expect to see incoming as messages).
+			//  All that's left is the commits which arrived when we were catching up. Throw them at Redis and call it a day.
+			pendingNotifications.forEach(function(notification){
+				publishCommitFromParsedPointerAsync(notification);
+			});
+			// Clear the temporary store and switch to messaging mode, finally.
+			pendingNotifications = [];
+			catchingUp = false;
+			// We're in messaging mode now. Nothing more to do - the subscriber function has taken over.
+		},
+		function _initialPreMessagingPublishFailed(reason){
+			if(shouldStop){
+				self._halt();
+				return;
+			}
+			conditionalRestart(new ErrorWrapper('Initial catch-up publish failed before entering messaging mode', reason));
+		});
 	});
 };
 
 RedisEventStreamer.prototype._publishCommitsFromDispatchList = function _publishCommitsFromDispatchList(start, end){
 	//TODO: Chunking the list into short fragments (1000 elements?), to save memory. This can be done with recursion on this function.
-	// If anyone should decide to amend this function with recursion, pay special attention to the _pollingInProgress manipulation.
 	var self = this;
 	var publishDeferred = when.defer();
 	self._readerConnection.lrange(dispatchPrefix + dispatchGlobalKey, start, end, function(err, commitPointers){
 		if(err){
-			//TODO: Wrap the error below properly.
 			publishDeferred.resolver.reject(new ErrorWrapper('LRANGE in _publishCommitsFromDispatchList failed', err));
 			return;
 		}
-		self._pollingInProgress = true;
 		var pendingPublishPromises = [];
 		// Issue a publish command for all the commit pointers we have at once. This is pipelining proper.
 		commitPointers.forEach(function(commitJSON, elementIndex){
@@ -342,11 +334,9 @@ RedisEventStreamer.prototype._publishCommitsFromDispatchList = function _publish
 		// Tie the resolution of the main promise to the successful completion of all publishes. A single failure will result in rejection (see the block above).
 		when.all(pendingPublishPromises,
 		function _publishingSucceeded(result){
-			self._pollingInProgress = false;
 			publishDeferred.resolver.resolve(result);
 		},
 		function _publishingFailed(reason){
-			self._pollingInProgress = false;
 			publishDeferred.resolver.reject(reason);
 		});
 	});
@@ -371,6 +361,7 @@ RedisEventStreamer.prototype._halt = function _halt(){
 };
 
 RedisEventStreamer.prototype._restart = function _restart(reason){
+	// Wait for the "ready" event - it means the "start" procedure can be called again.
 	this.once('ready', (function(){
 		this.start();
 	}).bind(this));
