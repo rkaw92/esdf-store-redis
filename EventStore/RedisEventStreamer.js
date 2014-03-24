@@ -4,6 +4,7 @@
 var when = require('when');
 var EventEmitter = require('events').EventEmitter;
 var util = require('util');
+var esdf = require('esdf');
 
 function ErrorWrapper(message, originalError){
 	this.message = message;
@@ -30,7 +31,7 @@ function publishCommitFromPointer(readerConnection, sequenceID, sequenceSlot, pu
 				return;
 			}
 			if(results.length === 1){
-				var currentCommit = JSON.parse(results[0]);
+				var currentCommit = esdf.core.Commit.reconstruct(JSON.parse(results[0]));
 				when(publisherFunction(currentCommit),
 				function _commitPublished(ok){
 					resolve();
