@@ -295,6 +295,8 @@ RedisEventStreamer.prototype._handleMessagingBasedStreaming = function _handleMe
 				self._halt();
 				return;
 			}
+			// Since the catching-up operation has just failed, we can safely indicate its end:
+			catchingUp = false;
 			conditionalRestart(new ErrorWrapper('Initial catch-up publish failed before entering messaging mode', reason));
 		});
 	});
