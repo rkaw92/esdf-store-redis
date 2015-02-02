@@ -32,12 +32,10 @@ function publishCommitFromPointer(readerConnection, sequenceID, sequenceSlot, pu
 			}
 			if(results.length === 1){
 				var currentCommit = esdf.core.Commit.reconstruct(JSON.parse(results[0]));
-				when(publisherFunction(currentCommit),
-				function _commitPublished(ok){
+				when(publisherFunction(currentCommit)).done(function _commitPublished(ok){
 					resolve();
 					return;
-				},
-				function _commitPublishFailed(reason){
+				}, function _commitPublishFailed(reason){
 					reject(reason);
 					return;
 				});
@@ -273,8 +271,7 @@ RedisEventStreamer.prototype._handleMessagingBasedStreaming = function _handleMe
 		else{
 			initialPublishPromise = when.resolve('Nothing to publish in the initial phase - proceeding to purge the pending async list');
 		}
-		initialPublishPromise.then(
-		function _commitsPublishedBeforeEnablingMessaging(){
+		initialPublishPromise.done(function _commitsPublishedBeforeEnablingMessaging(){
 			// The last shouldStop check - beyond this point, outstanding commits will be pushed out and catch-up mode will be disabled immediately.
 			if(shouldStop){
 				self._halt();
@@ -289,8 +286,7 @@ RedisEventStreamer.prototype._handleMessagingBasedStreaming = function _handleMe
 			pendingNotifications = [];
 			catchingUp = false;
 			// We're in messaging mode now. Nothing more to do - the subscriber function has taken over.
-		},
-		function _initialPreMessagingPublishFailed(reason){
+		}, function _initialPreMessagingPublishFailed(reason){
 			if(shouldStop){
 				self._halt();
 				return;
@@ -335,11 +331,9 @@ RedisEventStreamer.prototype._publishCommitsFromDispatchList = function _publish
 			pendingPublishPromises.push(thisPublishPromise);
 		});
 		// Tie the resolution of the main promise to the successful completion of all publishes. A single failure will result in rejection (see the block above).
-		when.all(pendingPublishPromises,
-		function _publishingSucceeded(result){
+		when.all(pendingPublishPromises).done(function _publishingSucceeded(result){
 			publishDeferred.resolver.resolve(result);
-		},
-		function _publishingFailed(reason){
+		}, function _publishingFailed(reason){
 			publishDeferred.resolver.reject(reason);
 		});
 	});
