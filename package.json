@@ -1,36 +1,36 @@
 {
-	"name": "esdf-store-redis",
-	"preferGlobal": false,
-	"version": "0.1.1",
-	"author": "Robert Kawecki <robert+npm@rkaw.pl>",
-	"description": "redis event store module for esdf",
-	"contributors": [],
-	"scripts": {
-		"test": "mocha tests"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/rkaw92/esdf-store-redis"
-	},
-	"keywords": [
-		"ddd",
-		"domain",
-		"cqrs",
-		"event",
-		"sourcing"
-	],
-	"dependencies": {
-		"when": "2.x.x",
-		"redis": "0.8.x"
-	},
-	"devDependencies": {
-		"uuid": "1.4.x"
-	},
-	"peerDependencies": {
-		"esdf": "0.1.x"
-	},
-	"license": "GPL3",
-	"engines": {
-		"node": ">=0.8"
-	}
+  "name": "esdf-store-redis",
+  "preferGlobal": false,
+  "version": "0.2.0",
+  "author": "Robert Kawecki <robert+npm@rkaw.pl>",
+  "description": "redis event store module for esdf",
+  "contributors": [],
+  "scripts": {
+    "test": "mocha tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rkaw92/esdf-store-redis"
+  },
+  "keywords": [
+    "ddd",
+    "domain",
+    "cqrs",
+    "event",
+    "sourcing"
+  ],
+  "dependencies": {
+    "when": "2.x.x",
+    "redis": "0.8.x"
+  },
+  "devDependencies": {
+    "uuid": "1.4.x"
+  },
+  "peerDependencies": {
+    "esdf": "0.1.x"
+  },
+  "license": "GPL3",
+  "engines": {
+    "node": ">=0.8"
+  }
 }
