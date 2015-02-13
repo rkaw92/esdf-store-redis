@@ -84,12 +84,18 @@ RedisEventSink.prototype.rehydrate = function rehydrate(object, sequenceID, sinc
 			rehydrateFuture.resolver.reject(err);
 			return;
 		}
-		for(var i = 0; i < serializedCommits.length; ++i){
-			var thisCommit = JSON.parse(serializedCommits[i]);
-			object.applyCommit(thisCommit);
-			rehydrateFuture.resolver.notify(i);
+		try{
+			for(var i = 0; i < serializedCommits.length; ++i){
+				var thisCommit = JSON.parse(serializedCommits[i]);
+				object.applyCommit(thisCommit);
+				rehydrateFuture.resolver.notify(i);
+			}
+			rehydrateFuture.resolver.resolve(object);
 		}
-		rehydrateFuture.resolver.resolve(object);
+		catch(rehydrationError){
+			rehydrateFuture.resolver.reject(rehydrationError);
+			return;
+		}
 	});
 	return rehydrateFuture.promise;
 };
