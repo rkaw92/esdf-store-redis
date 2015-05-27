@@ -49,9 +49,9 @@ RedisEventSink.prototype.sink = function sink(commit){
 	// Compute the expected length - if it differs, redis will signal a concurrency exception (by returning false).
 	var expectedSequenceLength = commit.sequenceSlot - 1;
 	// Note: capital EVAL is used to shut jshint up [ https://github.com/jshint/jshint/issues/1204 ].
-	self._client.EVAL([transactionalAggregateAppend, 2, sequenceKey, dispatchKey, expectedSequenceLength, commitPayload, commitDispatchEnvelope], function(err, listNewLength){
+	self._client.EVAL([transactionalAggregateAppend, 2, sequenceKey, dispatchKey, expectedSequenceLength, commitPayload, commitDispatchEnvelope], function(evalError, listNewLength){
 		// Note: Lua boolean true is mapped to redis numeric value 1, and false is mapped to nil (null in JS).
-		if(!err && listNewLength !== 0){
+		if(!evalError && listNewLength !== 0){
 			// No error reported and the Lua script returned the new dispatch list length, so both the dispatch message and the commit must have been saved.
 			self._client.publish(dispatchNotificationChannel, JSON.stringify({sequenceID: commit.sequenceID, sequenceSlot: commit.sequenceSlot, dispatchIndex: listNewLength - 1}), function(err, result){
 				// Result deliberately ignored. There is no harm in failed notifications, as long as the streamer is aware of the possibility and does periodic polling.
@@ -60,7 +60,16 @@ RedisEventSink.prototype.sink = function sink(commit){
 		}
 		else{
 			// Either there was an error or a concurrency exception. Since they both require a reload and retry, signal them all the same.
-			sinkFuture.resolver.reject(err ? err : new Error('Concurrency exception'));
+			if(evalError){
+				sinkFuture.resolver.reject(evalError);
+			}
+			else{
+				var concurrencyException = new Error('Concurrency exception');
+				concurrencyException.labels = {
+					isRetriable: true
+				};
+				sinkFuture.resolver.reject(fallbackError);
+			}
 		}
 	});
 	return sinkFuture.promise;
