@@ -68,7 +68,7 @@ RedisEventSink.prototype.sink = function sink(commit){
 				concurrencyException.labels = {
 					isRetriable: true
 				};
-				sinkFuture.resolver.reject(fallbackError);
+				sinkFuture.resolver.reject(concurrencyException);
 			}
 		}
 	});
