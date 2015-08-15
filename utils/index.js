@@ -30,3 +30,5 @@ module.exports.keymaps = {
 	normal: normalKeymap,
 	blocksOf100: blocksOf100Keymap
 };
+
+module.exports.AMQPPublishStreamConverter = require('./AMQPPublishStreamConverter').AMQPPublishStreamConverter;
