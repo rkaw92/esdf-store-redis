@@ -32,3 +32,4 @@ module.exports.keymaps = {
 };
 
 module.exports.AMQPPublishStreamConverter = require('./AMQPPublishStreamConverter').AMQPPublishStreamConverter;
+module.exports.RedisDelayedWriter = require('./RedisDelayedWriter').RedisDelayedWriter;
