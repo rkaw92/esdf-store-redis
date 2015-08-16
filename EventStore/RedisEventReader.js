@@ -23,6 +23,10 @@ function RedisEventReader(readClient, subscribeClient, options) {
 	// Tunables:
 	self._defaultReadSize = options.defaultReadSize || 20;
 	self._pollingInterval = options.pollingInterval || 2000;
+	self._getContainers = options.getContainers || false;
+	
+	// Pre-filtering:
+	self._filterPredicate = options.filterPredicate || function(commitPointer) { return true; };
 	
 	// State:
 	self._listening = false;
@@ -49,7 +53,7 @@ RedisEventReader.prototype._read = function _read(size) {
 	size = Math.min(size || self._defaultReadSize, self._defaultReadSize);
 	
 	// Start awaiting changes. This will keep updating the dispatch queue length in the background.
-	this._listen();
+	self._listen();
 	
 	// If we are currently reading, do not start a request. Instead, remember the fact that a read request was made, to start reading immediately.
 	if (self._pendingRead) {
@@ -63,14 +67,31 @@ RedisEventReader.prototype._read = function _read(size) {
 	
 	function readEntries() {
 		call(client.LRANGE.bind(client), self._dispatchList, self._startNumber, self._startNumber + size - 1).done(function(dispatchItems) {
-			//TODO: Filtering of commit entries by aggregate type?
-			// Guard clause: if there are no new items to read, wait until some become available.
-			if (dispatchItems.length === 0) {
+			// First, pre-filter the items to see if any would actually be emitted from the stream:
+			var dispatchItemContainers = [];
+			dispatchItems.forEach(function(item, itemIndex) {
+				var isInteresting = self._filterPredicate(item);
+				if (isInteresting) {
+					// Prepare a container which will hold the position of the item in the global dispatch queue as well as the item itself.
+					dispatchItemContainers.push({
+						item: item,
+						position: self._startNumber + itemIndex
+					});
+				}
+			});
+			
+			// Guard clause: if there are no new or interesting items to read, wait until some become available.
+			if (dispatchItemContainers.length === 0) {
+				// It is possible that, despite not having found any interesting entries, some were read. Advance by the count obtained.
+				self._startNumber += dispatchItems.length;
 				self._waitForEntries().done(readEntries);
 				return;
 			}
 			
-			when.all(dispatchItems.map(JSON.parse.bind(JSON)).map(function(item) {
+			when.all(dispatchItemContainers.map(function(itemContainer) {
+				var item = JSON.parse(itemContainer.item);
+				var position = itemContainer.position;
+				var itemPosition = itemContainer.position;
 				return call(client.LRANGE.bind(client), self._sequencePrefix + item.sequenceID, item.sequenceSlot - 1, item.sequenceSlot - 1).then(function(commits) {
 					var commitString = commits[0];
 					if (!commitString) {
@@ -78,7 +99,15 @@ RedisEventReader.prototype._read = function _read(size) {
 					}
 					
 					var commitObject = esdf.core.Commit.reconstruct(JSON.parse(commitString));
-					self.push(commitObject);
+					if (self._getContainers) {
+						self.push({
+							commit: commitObject,
+							position: position
+						});
+					}
+					else {
+						self.push(commitObject);
+					}
 				});
 			})).done(function() {
 				self._startNumber += dispatchItems.length;
