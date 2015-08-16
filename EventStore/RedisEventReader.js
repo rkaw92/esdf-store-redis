@@ -70,6 +70,7 @@ RedisEventReader.prototype._read = function _read(size) {
 			// First, pre-filter the items to see if any would actually be emitted from the stream:
 			var dispatchItemContainers = [];
 			dispatchItems.forEach(function(item, itemIndex) {
+				item = JSON.parse(item);
 				var isInteresting = self._filterPredicate(item);
 				if (isInteresting) {
 					// Prepare a container which will hold the position of the item in the global dispatch queue as well as the item itself.
@@ -89,7 +90,7 @@ RedisEventReader.prototype._read = function _read(size) {
 			}
 			
 			when.all(dispatchItemContainers.map(function(itemContainer) {
-				var item = JSON.parse(itemContainer.item);
+				var item = itemContainer.item;
 				var position = itemContainer.position;
 				var itemPosition = itemContainer.position;
 				return call(client.LRANGE.bind(client), self._sequencePrefix + item.sequenceID, item.sequenceSlot - 1, item.sequenceSlot - 1).then(function(commits) {
@@ -178,6 +179,7 @@ RedisEventReader.prototype._waitForEntries = function _waitForEntries() {
 		// There is a time gap between starting to read via LRANGE and entering here. Make sure that nothing has appeared since.
 		if (self._lastKnownNumber >= self._startNumber) {
 			resolve();
+			return;
 		}
 		
 		self.once('newEntries', function() {
