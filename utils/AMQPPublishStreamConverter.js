@@ -9,6 +9,7 @@ function AMQPPublishStreamConverter(exchangeName, options) {
 	//TODO: true might be a saner default!
 	this._persistent = Boolean(options.persistent);
 	this._stringify = Boolean(options.stringify);
+	this._publishCallback = options.publishCallback || null;
 	
 	stream.Transform.call(this, { objectMode: true });
 	
@@ -17,7 +18,18 @@ function AMQPPublishStreamConverter(exchangeName, options) {
 AMQPPublishStreamConverter.prototype = Object.create(stream.Transform.prototype);
 
 AMQPPublishStreamConverter.prototype._transform = function _transform(input, encoding, callback) {
-	var commit = input;
+	var commit;
+	// Detect the format - container or plain commit?
+	if (input.commit && typeof(input.position) === 'number') {
+		// This looks like a container (RedisEventReader's options.getContainers tunable).
+		commit = input.commit;
+	}
+	else {
+		// This must be the default format - a plain commit.
+		commit = input;
+	}
+	
+	var publishCallback = (this._publishCallback) ? this._publishCallback.bind(undefined, input) : null;
 	commit.events.forEach(function(event) {
 		var content;
 		if (this._stringify) {
@@ -30,7 +42,8 @@ AMQPPublishStreamConverter.prototype._transform = function _transform(input, enc
 			exchange: this._exchangeName,
 			routingKey: commit.aggregateType + '.' + event.eventType,
 			content: content,
-			options: { persistent: this._persistent }
+			options: { persistent: this._persistent },
+			callback: publishCallback
 		});
 	}, this);
 	callback();
