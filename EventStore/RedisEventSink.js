@@ -1,4 +1,6 @@
 var when = require('when');
+var nodefn = require('when/node');
+var esdf = require('esdf');
 
 /**
  * Construct a new RedisEventSink instance.
@@ -11,6 +13,7 @@ var when = require('when');
 function RedisEventSink(client){
 	this._client = client;
 	//TODO: this._client.on('error') ?
+	this._readSize = 100;
 }
 
 /** This is the Lua script used when saving a commit. It checks the sequence length against the expected number, and if it matches, appends the commit (otherwise, returns false).
@@ -73,6 +76,29 @@ RedisEventSink.prototype.sink = function sink(commit){
 		}
 	});
 	return sinkFuture.promise;
+};
+
+/**
+ * Get a ReadableStream of commits comprising a given event sequence.
+ * @param {string} sequenceID - ID of the sequence. Typically equal to the Aggregate Root ID.
+ * @param {number} since - The sequence slot to start reading at. Note that these are counted from zero.
+ */
+RedisEventSink.prototype.getCommitStream = function getCommitStream(sequenceID, since) {
+	var self = this;
+	var keyToLoad = sequencePrefix + sequenceID;
+	
+	return new esdf.utils.CommitStream(function(sequenceID, currentOffset) {
+		// Call LRANGE sequence:<sequenceID> <currentOffset> <currentOffset + readSize>
+		//TODO: If we know from a previous call that the stream has been exhausted, skip the last LRANGE and just return null immediately. This saves us one round-trip on each load.
+		return nodefn.call(self._client.lrange.bind(self._client), keyToLoad, currentOffset - 1, currentOffset - 1 + self._readSize).then(function(commitStrings) {
+			// Tell the upper layer when the reading has ended:
+			return commitStrings.length > 0 ? commitStrings.map(function(commitString) {
+				return JSON.parse(commitString);
+			}) : null;
+		}).catch(function(error) {
+			console.error('LRANGE >>> ERROR %s', error);
+		});
+	}, sequenceID, since);
 };
 
 /**

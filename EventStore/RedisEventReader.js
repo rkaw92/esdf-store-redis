@@ -44,6 +44,9 @@ function RedisEventReader(readClient, subscribeClient, options) {
 	self._subscribeClient.on('error', function(error) {
 		self.emit('error', error);
 	});
+	
+	// Return a CommitStream that wraps the reader itself. Since the reader delivers batches of commits, this additional layer is needed to turn them into individual commit objects.
+	return new esdf.utils.CommitStream(self);
 }
 RedisEventReader.prototype = Object.create(ReadableStream.prototype);
 
@@ -92,7 +95,6 @@ RedisEventReader.prototype._read = function _read(size) {
 			when.all(dispatchItemContainers.map(function(itemContainer) {
 				var item = itemContainer.item;
 				var position = itemContainer.position;
-				var itemPosition = itemContainer.position;
 				return call(client.LRANGE.bind(client), self._sequencePrefix + item.sequenceID, item.sequenceSlot - 1, item.sequenceSlot - 1).then(function(commits) {
 					var commitString = commits[0];
 					if (!commitString) {
@@ -101,16 +103,19 @@ RedisEventReader.prototype._read = function _read(size) {
 					
 					var commitObject = esdf.core.Commit.reconstruct(JSON.parse(commitString));
 					if (self._getContainers) {
-						self.push({
+						return {
 							commit: commitObject,
 							position: position
-						});
+						};
 					}
 					else {
-						self.push(commitObject);
+						return commitObject;
 					}
 				});
-			})).done(function() {
+			})).then(function(commits) {
+				// Push an entire batch of commits into the read buffer:
+				self.push(commits);
+			}).done(function() {
 				self._startNumber += dispatchItems.length;
 				self._pendingRead = false;
 				if (self._readRequested) {
