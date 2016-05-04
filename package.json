@@ -20,8 +20,8 @@
     "sourcing"
   ],
   "dependencies": {
-    "when": "2.x.x",
-    "redis": "0.8.x"
+    "redis": "0.8.x",
+    "when": "3.7.x"
   },
   "devDependencies": {
     "uuid": "1.4.x"
